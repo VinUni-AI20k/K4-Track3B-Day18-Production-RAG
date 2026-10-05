@@ -1,0 +1,10 @@
+{
+  "M1 chunking (total, s)": 0.029,
+  "M5 enrichment (total, s)": 266.495,
+  "M2 indexing BM25+dense (total, s)": 17.86,
+  "M3 load reranker (s)": 0.0,
+  "M2 hybrid search (avg ms/query)": 96.938,
+  "M3 rerank (avg ms/query)": 1167.667,
+  "LLM generation (avg ms/query)": 961.392,
+  "M4 RAGAS eval (total, s)": 31.584
+}
