@@ -31,14 +31,17 @@ def build_pipeline():
     all_chunks = []
     for doc in docs:
         parents, children = chunk_hierarchical(doc["text"], metadata=doc["metadata"])
+        parent_texts = {p.metadata["parent_id"]: p.text for p in parents}
         for child in children:
-            all_chunks.append({"text": child.text, "metadata": {**child.metadata, "parent_id": child.parent_id}})
+            all_chunks.append({"text": child.text, "metadata": {**child.metadata,
+                               "parent_id": child.parent_id,
+                               "parent_text": parent_texts[child.parent_id]}})
     print(f"  ✓ {len(all_chunks)} chunks from {len(docs)} documents ({time.time()-t0:.1f}s)", flush=True)
 
     # Step 2: Enrichment (M5)
     t0 = time.time()
     print(f"\n[2/4] Enriching {len(all_chunks)} chunks (M5, 1 API call/chunk)...", flush=True)
-    enriched = enrich_chunks(all_chunks)
+    enriched = enrich_chunks(all_chunks, cache_dir=".run_cache/enrichment")
     if enriched:
         all_chunks = [{"text": e.enriched_text, "metadata": e.auto_metadata} for e in enriched]
         print(f"  ✓ Enriched {len(enriched)} chunks ({time.time()-t0:.1f}s)", flush=True)
@@ -66,21 +69,17 @@ def run_query(query: str, search: HybridSearch, reranker: CrossEncoderReranker) 
     results = search.search(query)
     docs = [{"text": r.text, "score": r.score, "metadata": r.metadata} for r in results]
     reranked = reranker.rerank(query, docs, top_k=RERANK_TOP_K)
-    contexts = [r.text for r in reranked] if reranked else [r.text for r in results[:3]]
+    selected = reranked if reranked else results[:3]
+    contexts = list(dict.fromkeys(r.metadata.get("parent_text") or
+                    r.metadata.get("original_text") or r.text for r in selected))
 
-    from config import OPENAI_API_KEY
-    if OPENAI_API_KEY and contexts:
+    from config import GROQ_API_KEY
+    if GROQ_API_KEY and contexts and os.getenv("LAB18_OFFLINE") != "1":
         try:
-            from openai import OpenAI
-            client = OpenAI()
-            context_str = "\n\n".join(contexts)
-            resp = client.chat.completions.create(model="gpt-4o-mini", messages=[
-                {"role": "system", "content": "Trả lời CHỈ dựa trên context. Nếu không có → nói 'Không tìm thấy.'"},
-                {"role": "user", "content": f"Context:\n{context_str}\n\nCâu hỏi: {query}"},
-            ])
-            answer = resp.choices[0].message.content
-        except Exception as e:
-            print(f"  ⚠️  LLM generation failed: {e}", flush=True)
+            from src.ai_client import generate_answer
+            answer = generate_answer(query, contexts)
+        except Exception as exc:
+            print(f"Groq generation failed: {type(exc).__name__}", flush=True)
             answer = contexts[0]
     else:
         answer = contexts[0] if contexts else "Không tìm thấy thông tin."
@@ -103,7 +102,9 @@ def evaluate_pipeline(search: HybridSearch, reranker: CrossEncoderReranker):
 
     t0 = time.time()
     print(f"\n[Eval] Running RAGAS (4 metrics × {len(test_set)} questions)...", flush=True)
-    results = evaluate_ragas(questions, answers, all_contexts, ground_truths)
+    results = evaluate_ragas(questions, answers, all_contexts, ground_truths, cache_dir=".run_cache/evaluation")
+    if results.get("evaluation_status") != "success":
+        print(f"  RAGAS: {results.get('evaluation_reason')}", flush=True)
     print(f"  ✓ RAGAS done ({time.time()-t0:.1f}s)", flush=True)
 
     print("\n" + "=" * 60)

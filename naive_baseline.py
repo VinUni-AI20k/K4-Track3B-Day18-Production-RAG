@@ -38,25 +38,18 @@ def main():
     test_set = load_test_set()
     questions, answers, all_contexts, ground_truths = [], [], [], []
 
-    from config import OPENAI_API_KEY
-    llm_client = None
-    if OPENAI_API_KEY:
-        from openai import OpenAI
-        llm_client = OpenAI()
+    from config import GROQ_API_KEY
+    from src.ai_client import generate_answer
 
     for i, item in enumerate(test_set):
         results = search.search(item["question"], top_k=3, collection=NAIVE_COLLECTION)
         contexts = [r.text for r in results]
 
-        if llm_client and contexts:
+        if GROQ_API_KEY and contexts and os.getenv("LAB18_OFFLINE") != "1":
             try:
-                context_str = "\n\n".join(contexts)
-                resp = llm_client.chat.completions.create(model="gpt-4o-mini", messages=[
-                    {"role": "system", "content": "Trả lời CHỈ dựa trên context. Nếu không có → nói 'Không tìm thấy.'"},
-                    {"role": "user", "content": f"Context:\n{context_str}\n\nCâu hỏi: {item['question']}"},
-                ])
-                answer = resp.choices[0].message.content
-            except Exception:
+                answer = generate_answer(item["question"], contexts)
+            except Exception as exc:
+                print(f"Groq generation failed: {type(exc).__name__}", flush=True)
                 answer = contexts[0]
         else:
             answer = contexts[0] if contexts else "Không tìm thấy."
@@ -67,7 +60,7 @@ def main():
         ground_truths.append(item["ground_truth"])
         print(f"  [{i+1}/{len(test_set)}] {item['question'][:50]}...", flush=True)
 
-    results = evaluate_ragas(questions, answers, all_contexts, ground_truths)
+    results = evaluate_ragas(questions, answers, all_contexts, ground_truths, cache_dir=".run_cache/evaluation")
     print("\nBASIC BASELINE SCORES")
     for m in ["faithfulness", "answer_relevancy", "context_precision", "context_recall"]:
         print(f"  {m}: {results.get(m, 0):.4f}")

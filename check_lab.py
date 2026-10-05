@@ -51,7 +51,7 @@ def check_todos() -> int:
             if f.endswith(".py"):
                 with open(os.path.join(root, f), encoding="utf-8") as fh:
                     for line in fh:
-                        if "# TODO:" in line:
+                        if "# TODO" in line:
                             count += 1
     return count
 
@@ -60,9 +60,10 @@ def run_tests() -> tuple[int, int]:
     """Run pytest and return (passed, total)."""
     try:
         import re
+        test_env = {**os.environ, "LAB18_OFFLINE": "1"}
         result = subprocess.run(
-            [sys.executable, "-m", "pytest", "tests/", "-v", "--tb=no", "-q"],
-            capture_output=True, text=True, timeout=120, encoding="utf-8", errors="replace"
+            [sys.executable, "-m", "pytest", "tests/", "-v", "--tb=no", "-q", "-p", "no:cacheprovider"],
+            capture_output=True, text=True, timeout=120, encoding="utf-8", errors="replace", env=test_env
         )
         lines = result.stdout.strip().split("\n")
         summary = lines[-1] if lines else ""
@@ -70,7 +71,10 @@ def run_tests() -> tuple[int, int]:
         m_fail = re.search(r"(\d+)\s+failed", summary)
         passed = int(m_pass.group(1)) if m_pass else 0
         failed = int(m_fail.group(1)) if m_fail else 0
-        total = passed + failed
+        m_error = re.search(r"(\d+)\s+errors?", summary)
+        total = passed + failed + (int(m_error.group(1)) if m_error else 0)
+        if result.returncode != 0 and total == passed:
+            total += 1
         return passed, total
     except Exception as e:
         print(f"  ⚠️  pytest error: {e}")
@@ -93,13 +97,25 @@ def validate():
     if check_file("reports/ragas_report.json"):
         if not check_json("reports/ragas_report.json", ["aggregate", "num_questions"]):
             errors += 1
+        else:
+            with open("reports/ragas_report.json", encoding="utf-8") as f:
+                report = json.load(f)
+            if report["aggregate"].get("evaluation_status") in ("failed", "skipped"):
+                print("  ⚠️  Báo cáo đúng định dạng nhưng chưa có kết quả đánh giá hoàn tất")
     else:
         errors += 1
     check_file("reports/naive_baseline_report.json", required=False)
 
     # 3. Analysis
     print("\n📝 Analysis:")
-    check_file("analysis/failure_analysis.md")
+    if not check_file("analysis/failure_analysis.md"):
+        errors += 1
+    else:
+        with open("analysis/failure_analysis.md", encoding="utf-8") as f:
+            analysis = f.read()
+        if "(copy template)" in analysis or "[Họ và tên]" in analysis or analysis.count("**Root cause:**") < 5:
+            print("  ❌ Phân tích 5 ca chưa hoàn thiện")
+            errors += 1
 
     # 4. Individual reflections
     print("\n👤 Individual reflections:")
@@ -117,6 +133,7 @@ def validate():
             print(f"  ✅ {r}")
     else:
         print(f"  ⚠️  Chưa có file reflection cá nhân (đặt tại {ref_dir}/reflection_[HọTên].md hoặc analysis/reflection_[HọTên].md)")
+        errors += 1
 
     # 5. TODO count
     print("\n🔧 TODO markers:")
@@ -125,24 +142,30 @@ def validate():
         print("  ✅ Không còn TODO nào")
     else:
         print(f"  ⚠️  Còn {todo_count} TODO chưa implement")
+        errors += 1
 
     # 6. Tests
     print("\n🧪 Auto-tests:")
     passed, total = run_tests()
     if total > 0:
         pct = passed / total * 100
-        print(f"  {'✅' if pct >= 80 else '⚠️'} {passed}/{total} tests passed ({pct:.0f}%)")
+        print(f"  {'✅' if passed == total else '❌'} {passed}/{total} tests passed ({pct:.0f}%)")
+        if passed != total:
+            errors += 1
     else:
         print("  ⚠️  Không chạy được tests")
+        errors += 1
 
     # 7. Summary
     print("\n" + "=" * 50)
     if errors == 0:
         print("🚀 Bài lab sẵn sàng để nộp!")
+        print("Kiểm tra này xác nhận định dạng và tests; hãy đối chiếu kết quả RAGAS với đề bài.")
     else:
         print(f"❌ Có {errors} lỗi. Sửa trước khi nộp.")
     print("=" * 50)
+    return errors
 
 
 if __name__ == "__main__":
-    validate()
+    raise SystemExit(1 if validate() else 0)
