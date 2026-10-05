@@ -1,4 +1,8 @@
 .env
+.venv/
+.test_tmp/
+pytest-cache-files-*/
+.run_cache/
 .DS_Store
 __pycache__/
 *.pyc
